@@ -1,15 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-
-// Simple dependency-free Snake implemented with absolute-positioned View blocks
-// Works on web and native. Uses on-screen D-pad controls.
+import { Dimensions, GestureResponderEvent, PanResponder, PanResponderGestureState, StyleSheet, Text, View } from 'react-native';
 
 type Point = { x: number; y: number };
-
 type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT';
 
 const BOARD_COLS = 20;
-const BOARD_ROWS = 26; // a bit taller to fit controls below
+const BOARD_ROWS = 26;
 const INITIAL_SNAKE: Point[] = [
   { x: 5, y: 10 },
   { x: 4, y: 10 },
@@ -35,25 +31,37 @@ export default function SnakeScreen() {
   const dirRef = useRef(dir);
   const runningRef = useRef(running);
   const snakeRef = useRef(snake);
+  const foodRef = useRef(food); // ✅ add food ref
+  const growthRef = useRef(0);
 
   useEffect(() => { dirRef.current = dir; }, [dir]);
   useEffect(() => { runningRef.current = running; }, [running]);
   useEffect(() => { snakeRef.current = snake; }, [snake]);
+  useEffect(() => { foodRef.current = food; }, [food]); // ✅ keep ref in sync
 
-  // Game loop
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (!runningRef.current) return;
-      step();
-    }, speed);
-    return () => clearInterval(id);
-  }, [speed]);
+  const resetGame = useCallback(() => {
+    setRunning(false);
+    setTimeout(() => {
+      setSnake(INITIAL_SNAKE);
+      setDir(INITIAL_DIR);
+      const f = randomFood(INITIAL_SNAKE);
+      setFood(f);
+      foodRef.current = f; // ✅ keep ref consistent immediately
+      setSpeed(BASE_SPEED_MS);
+      setScore(0);
+      growthRef.current = 0;
+      setRunning(true);
+    }, 600);
+  }, []);
 
   const step = useCallback(() => {
     setSnake(prev => {
+      const currentFood = foodRef.current; // ✅ read latest food
       const nextHead = moveHead(prev[0], dirRef.current);
 
-      // Collision with walls
+      const ateFood = nextHead.x === currentFood.x && nextHead.y === currentFood.y;
+      const willMoveTail = !ateFood && growthRef.current === 0;
+
       if (
         nextHead.x < 0 ||
         nextHead.x >= BOARD_COLS ||
@@ -64,43 +72,47 @@ export default function SnakeScreen() {
         return INITIAL_SNAKE;
       }
 
-      // Collision with self
-      const hitsSelf = prev.some(p => p.x === nextHead.x && p.y === nextHead.y);
+      const bodyToCheck = willMoveTail ? prev.slice(0, -1) : prev;
+      const hitsSelf = bodyToCheck.some(p => p.x === nextHead.x && p.y === nextHead.y);
       if (hitsSelf) {
         resetGame();
         return INITIAL_SNAKE;
       }
 
-      const ateFood = nextHead.x === food.x && nextHead.y === food.y;
       const newSnake = [nextHead, ...prev];
-      if (!ateFood) {
-        newSnake.pop();
-      } else {
+
+      if (ateFood) {
+        growthRef.current += 1;
         setScore(s => s + 1);
-        setFood(randomFood(newSnake));
-        // Slight speed up, min cap
+
+        const newFood = randomFood(newSnake);
+        setFood(newFood);
+        foodRef.current = newFood; // ✅ keep ref consistent immediately
+
         setSpeed(ms => Math.max(70, Math.floor(ms * 0.96)));
+      }
+
+      if (growthRef.current > 0) {
+        growthRef.current -= 1;
+      } else {
+        newSnake.pop();
       }
 
       return newSnake;
     });
-  }, [food]);
+  }, [resetGame]);
 
-  const resetGame = useCallback(() => {
-    setRunning(false);
-    setTimeout(() => {
-      setSnake(INITIAL_SNAKE);
-      setDir(INITIAL_DIR);
-      setFood(randomFood(INITIAL_SNAKE));
-      setSpeed(BASE_SPEED_MS);
-      setScore(0);
-      setRunning(true);
-    }, 600);
-  }, []);
+  // ✅ interval now depends on `step` too, so it always calls the latest function
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!runningRef.current) return;
+      step();
+    }, speed);
+    return () => clearInterval(id);
+  }, [speed, step]);
 
   const changeDir = useCallback((next: Direction) => {
     setDir(curr => {
-      // prevent direct reverse
       if (
         (curr === 'UP' && next === 'DOWN') ||
         (curr === 'DOWN' && next === 'UP') ||
@@ -111,13 +123,26 @@ export default function SnakeScreen() {
     });
   }, []);
 
+  const panResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderRelease: (_evt: GestureResponderEvent, gesture: PanResponderGestureState) => {
+      const { dx, dy } = gesture;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      const threshold = 12;
+      if (absDx < threshold && absDy < threshold) return;
+      if (absDx > absDy) changeDir(dx > 0 ? 'RIGHT' : 'LEFT');
+      else changeDir(dy > 0 ? 'DOWN' : 'UP');
+    },
+  }), [changeDir]);
+
   return (
     <View style={styles.screen}>
       <Text style={styles.title}>Snake</Text>
       <Text style={styles.subtitle}>Score: {score}</Text>
 
-      <View style={[styles.board, { width: boardWidth, height: boardHeight }]}>        
-        {/* Food */}
+      <View style={[styles.board, { width: boardWidth, height: boardHeight }]} {...panResponder.panHandlers}>
         <View
           style={[
             styles.food,
@@ -131,7 +156,6 @@ export default function SnakeScreen() {
           ]}
         />
 
-        {/* Snake */}
         {snake.map((seg, idx) => (
           <View
             key={idx}
@@ -149,7 +173,6 @@ export default function SnakeScreen() {
           />
         ))}
 
-        {/* Grid (light) */}
         {Array.from({ length: BOARD_ROWS }).map((_, r) => (
           <View key={`row-${r}`} style={[styles.gridRow, { top: r * cellSize, width: boardWidth }]} />
         ))}
@@ -158,34 +181,12 @@ export default function SnakeScreen() {
         ))}
       </View>
 
-      {/* Controls */}
-      <View style={styles.controls}>        
-        <View style={styles.row}>          
-          <TouchableOpacity onPress={() => changeDir('UP')} style={[styles.btn, styles.btnWide]}>
-            <Text style={styles.btnText}>▲</Text>
-          </TouchableOpacity>
-        </View>
+      <View style={styles.controls}>
+        <Text style={{ color: '#888' }}>Swipe on the board to move • Tap below to Pause/Restart</Text>
         <View style={styles.row}>
-          <TouchableOpacity onPress={() => changeDir('LEFT')} style={styles.btn}>
-            <Text style={styles.btnText}>◀</Text>
-          </TouchableOpacity>
-          <View style={{ width: 24 }} />
-          <TouchableOpacity onPress={() => changeDir('RIGHT')} style={styles.btn}>
-            <Text style={styles.btnText}>▶</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.row}>
-          <TouchableOpacity onPress={() => changeDir('DOWN')} style={[styles.btn, styles.btnWide]}>
-            <Text style={styles.btnText}>▼</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.row}>
-          <TouchableOpacity onPress={() => setRunning(r => !r)} style={[styles.btnSmall, { backgroundColor: '#444' }]}>            
-            <Text style={styles.btnSmallText}>{running ? 'Pause' : 'Resume'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={resetGame} style={[styles.btnSmall, { backgroundColor: '#8b0000' }]}>            
-            <Text style={styles.btnSmallText}>Restart</Text>
-          </TouchableOpacity>
+          <Text onPress={() => setRunning(r => !r)} style={styles.linkBtn}>{running ? 'Pause' : 'Resume'}</Text>
+          <Text style={{ color: '#666' }}>  •  </Text>
+          <Text onPress={resetGame} style={styles.linkBtn}>Restart</Text>
         </View>
       </View>
     </View>
@@ -194,14 +195,11 @@ export default function SnakeScreen() {
 
 function moveHead(head: Point, dir: Direction): Point {
   switch (dir) {
-    case 'UP':
-      return { x: head.x, y: head.y - 1 };
-    case 'DOWN':
-      return { x: head.x, y: head.y + 1 };
-    case 'LEFT':
-      return { x: head.x - 1, y: head.y };
-    case 'RIGHT':
-      return { x: head.x + 1, y: head.y };
+    case 'UP': return { x: head.x, y: head.y - 1 };
+    case 'DOWN': return { x: head.x, y: head.y + 1 };
+    case 'LEFT': return { x: head.x - 1, y: head.y };
+    case 'RIGHT': return { x: head.x + 1, y: head.y };
+    default: return head; // ✅ keeps TS happy if dir is widened
   }
 }
 
@@ -209,9 +207,7 @@ function randomFood(occupied: Point[]): Point {
   while (true) {
     const x = Math.floor(Math.random() * BOARD_COLS);
     const y = Math.floor(Math.random() * BOARD_ROWS);
-    if (!occupied.some(p => p.x === x && p.y === y)) {
-      return { x, y };
-    }
+    if (!occupied.some(p => p.x === x && p.y === y)) return { x, y };
   }
 }
 
@@ -275,32 +271,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginVertical: 6,
   },
-  btn: {
-    width: 72,
-    height: 56,
-    borderRadius: 10,
-    backgroundColor: '#1f243b',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  btnWide: {
-    width: 160,
-  },
-  btnText: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  btnSmall: {
-    paddingHorizontal: 16,
-    height: 40,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginHorizontal: 8,
-  },
-  btnSmallText: {
-    color: '#fff',
+  linkBtn: {
+    color: '#8ab4ff',
     fontWeight: '700',
   },
 });
