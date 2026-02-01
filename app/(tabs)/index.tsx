@@ -1,11 +1,26 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Alert, StyleSheet, TouchableOpacity } from 'react-native';
+import { Alert, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 
 export default function HomeScreen() {
-  const handleQuestionPress = () => {
-    Alert.alert('Question', 'Why are u ... ?');
-  };
+const handleQuestionPress = () => {
+  const question = "Why are u gay?";
+
+  if (Platform.OS === "web") {
+    const choice = window.confirm(question);
+    window.alert(choice ? "You are gay" : "Who says I'm gay?");
+  } else {
+    Alert.alert(
+      "Question",
+      question,
+      [
+        { text: "Who says I'm gay?", onPress: () => {} },
+        { text: "You are gay", onPress: () => {} },
+      ]
+    );
+  }
+};
+
 
   return (
     <ThemedView style={styles.container}>
